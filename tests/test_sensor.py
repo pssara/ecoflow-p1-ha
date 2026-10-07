@@ -178,6 +178,51 @@ class FakeRegistry:
 class SensorTests(unittest.TestCase):
     """Verify deterministic entity exposure and compatibility migrations."""
 
+    def test_gas_missing_or_zero_readings_are_unavailable(self) -> None:
+        """Do not publish temporary zero totals or missing gas readings."""
+        channel = models.MBusChannel(
+            1, device_type=3, delivered=Decimal("123.456"), unit="m3"
+        )
+        coordinator = SimpleNamespace(data=_data_with_channel(channel))
+        description = sensor._mbus_description(channel, "gas")
+        entity = sensor.EcoFlowP1Sensor(
+            coordinator,
+            SimpleNamespace(unique_id="P1-123", entry_id="test"),
+            description,
+            "dongle-device-id",
+        )
+        for value in (Decimal("123.456"), Decimal("0"), None, Decimal("123.457")):
+            with self.subTest(value=value):
+                coordinator.data = _data_with_channel(replace(channel, delivered=value))
+                expected = value if value else None
+                self.assertEqual(entity.native_value, expected)
+                self.assertEqual(entity.available, expected is not None)
+
+        coordinator.data = replace(
+            coordinator.data,
+            telegram=replace(coordinator.data.telegram, meter_info=models.MeterInfo()),
+        )
+        self.assertIsNone(entity.native_value)
+        self.assertFalse(entity.available)
+        self.assertEqual(description.native_unit_of_measurement, "m3")
+        self.assertEqual(description.state_class, "total_increasing")
+        self.assertEqual(entity._attr_unique_id, "P1-123_mbus_gas_1")
+
+    def test_other_mbus_zero_readings_remain_available(self) -> None:
+        """Keep zero totals valid for water and energy meters."""
+        for kind, device_type, unit in (("water", 7, "m3"), ("energy", 4, "kWh")):
+            with self.subTest(kind=kind):
+                channel = models.MBusChannel(
+                    1, device_type=device_type, delivered=Decimal("0"), unit=unit
+                )
+                self.assertEqual(
+                    sensor._value_for_description(
+                        _data_with_channel(channel),
+                        sensor._mbus_description(channel, kind),
+                    ),
+                    Decimal("0"),
+                )
+
     def test_demand_sensors_and_history_attributes(self) -> None:
         """Expose watt scalar states and JSON-compatible monthly peak records."""
         parser = load_module("custom_components.ecoflow_p1.parser")

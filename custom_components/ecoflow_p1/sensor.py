@@ -345,7 +345,12 @@ def _value_for_description(
         return value if isinstance(value, int) else None
     if description.meter_channel is not None:
         channel = data.telegram.meter_info.mbus_channels.get(description.meter_channel)
-        return channel.delivered if channel is not None else None
+        if channel is None or channel.delivered is None:
+            return None
+        # Some meters temporarily report zero for the cumulative gas total.
+        if description.device_class == SensorDeviceClass.GAS and channel.delivered == 0:
+            return None
+        return channel.delivered
     if description.obis is None:
         return None
     if description.key == "monthly_peak":
